@@ -1,195 +1,394 @@
-# COLORA: Efficient Fine‑Tuning for Convolutional Models (OCT Case Study)
+# CoLoRA: Parameter-Efficient Fine-Tuning for Convolutional Models
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![TensorFlow 2.10+](https://img.shields.io/badge/TensorFlow-2.10+-orange.svg)](https://www.tensorflow.org/)
-[![Keras](https://img.shields.io/badge/Keras-2.10+-red.svg)](https://keras.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![arXiv](https://img.shields.io/badge/arXiv-2505.18315-b31b1b.svg)](https://arxiv.org/abs/2505.18315)
+CoLoRA (**Convolutional Low-Rank Adaptation**) is a parameter-efficient fine-tuning (PEFT) method for convolutional neural networks. It adapts pretrained convolutional kernels through structured pointwise-depthwise updates and can merge the learned update into the original convolutional weights before deployment.
 
----
+This repository contains a clean VGG16-CoLoRA implementation for **OCTMNISTv2**, together with a tutorial notebook and a command-line training/evaluation script.
 
-**CoLoRA (Convolutional Low-Rank Adaptation)** is a **parameter-efficient fine-tuning (PEFT)** method for convolutional neural networks.  
-It extends *Low-Rank Adaptation (LoRA)* to CNNs by introducing a structured low-rank decomposition in convolutional kernels, drastically reducing the number of trainable parameters while maintaining — or even improving — model accuracy.
-
-This repository provides the **official implementation** used in the paper:
-
-> Rivera, M., & Hoyos, A. (2025).  
-> *CoLoRA: Efficient Fine-Tuning for Convolutional Models with a Study Case on Optical Coherence Tomography Image Classification.*  
-> Centro de Investigación en Matemáticas (CIMAT), México.  
-> [arXiv:2505.18315](https://arxiv.org/abs/2505.18315)
-
----
+> **Paper / preprint**  
+> Mariano Rivera and Angello Hoyos. *COLORA: Efficient Fine-Tuning for Convolutional Models with a Study Case on Optical Coherence Tomography Image Classification*.  
+> arXiv:2505.18315 — https://arxiv.org/abs/2505.18315
 
 ## Highlights
 
-- **>80% fewer trainable parameters** compared to full fine-tuning  
-- **Plug-and-play CoLoRA layer** for any CNN backbone (e.g., VGG16, ResNet50v2)  
-- **No inference overhead** – merged into the base weights after training  
-- **Superior accuracy and stability** vs. standard fine-tuning  
-- **Validated on OCTMNIST** (Optical Coherence Tomography images)
+- Convolution-specific PEFT using **1×1 pointwise** and **depthwise spatial** updates.
+- More than **80% reduction in trainable convolutional-update parameters** relative to full convolutional fine-tuning.
+- Learned CoLoRA updates can be **merged into the pretrained convolutional kernels**, preserving the base inference graph.
+- Support for **full**, **balanced**, and **distilled** OCTMNISTv2 training data.
+- Validation-based model selection with the **held-out test split reserved for final evaluation**.
+- Training/evaluation script plus a tutorial-oriented notebook.
+- Experiments in the revised manuscript include VGG16, ResNet50, additional MedMNIST datasets, CIFAR-100, and ImageNet-R.
 
----
+## Repository structure
 
-## Abstract
+```text
+CoLoRA/
+├── README.md
+├── requirements.txt
+├── VGG16_CoLoRA_OCTMNIST_tutorial.ipynb
+├── vgg16_colora_octmnist.py
+└── imgs/
+```
 
-We introduce the Convolutional Low-Rank Adaptation (CoLoRA) method, designed to overcome inefficiencies in current CNN fine-tuning. CoLoRA is a natural extension of Low-Rank Adaptation (LoRA) to convolutional architectures. Using ImageNet-pretrained backbones (VGG16, ResNet50), CoLoRA enables stable, accurate, and efficient coarse-/fine-tuning while significantly reducing trainable parameters. On OCTMNIST, CoLoRA achieves nearly 5% accuracy improvement over classical fine-tuning and exceeds state-of-the-art models (Vision Transformer, State-space, KAN) by ~1–4%. CoLoRA maintains inference parameters unchanged and reduces trainable parameters. We validate with VGG16 and ResNet50.
+The distilled dataset file is not required for the `full` or `balanced` modes. To use `distilled`, place your precomputed file in the repository (or provide its path):
 
-Keywords: Convolutional Networks · Fine–tuning · Transfer Learning · LoRA · OCTMNIST
+```text
+OCTMNISTv2_Distilled.npz
+```
 
----
+The file must contain arrays named `X` and `Y`.
 
-## Overview
+## CoLoRA formulation
 
-### LoRA vs CNN kernel vs CoLoRA decomposition
-- LoRA applies low-rank updates to dense layers.  
-- CoLoRA applies low-rank updates to convolutional kernels via depthwise + pointwise separable convolutions.
+For a pretrained convolutional kernel \(K_0\), CoLoRA learns a structured update
 
-### CoLoRA layer (trainable residual separable convolution)
-- Residual separable conv is added to the frozen backbone conv.  
-- After each epoch, residual weights are merged; trainable residuals are reset for the next epoch.
+\[
+K = K_0 + \Delta K,
+\]
 
-![CoLoRA layer & operations](imgs/colora_layer.png)
+where the update is represented using pointwise and depthwise components. The pretrained convolution is frozen during CoLoRA adaptation, while the lightweight update branch is optimized.
 
-### Inception-style operation order and internal operations
-- First reduce channel correlations (1×1 pointwise), then learn spatial correlations (depthwise).  
-- Efficient, parameter-light, and generalizable to 1D/3D (given depthwise support).
+After adaptation, the learned update can be fused into the original convolutional kernel. This keeps the deployed model free of an additional residual CoLoRA branch.
 
----
+For VGG16, the implementation explicitly separates convolution and ReLU layers, initializes the backbone from ImageNet weights, and uses the following classification head:
 
-## Architecture: VGG16‑CoLoRA
+```text
+VGG16 backbone
+    ↓
+1×1 Conv2D (512 → 128)
+    ↓
+Flatten
+    ↓
+Dense(128, ReLU)
+    ↓
+Dense(4, logits)
+```
 
-We split Conv2D and activation (ReLU) explicitly, initialize ImageNet weights, and add a residual SeparableConv2D bypass per conv layer (pointwise initialized with Glorot, depthwise initialized as zeros). The decision head uses 1×1 conv (512→128), Dense(128, ReLU), and Dense(4, logits) for the four OCT classes.
+The four OCTMNIST classes are:
 
-- Total params (VGG16‑CoLoRA): ~15.58M  
-- Trainable by backprop per epoch: ~2.5M (merged into backbone after each epoch)  
-- Per‑epoch time: ~142 s on NVIDIA RTX 3090
-
-![VGG16-CoLoRA model schematic](imgs/vgg16_colora.png)
-
----
-
-## Dataset (OCTMNIST v2)
-
-Four classes:  
-- Choroidal Neovascularization (ChN)  
-- Diabetic Macular Edema (DME)  
-- Drusen  
-- Normal
-
-Very unbalanced (e.g., Drusen: 7,754 vs Normal: 46,026). To avoid dependence on heavy class balancing or augmentation, we:
-- Build a Balanced dataset using the first 7,754 samples per class (31,016 total)
-- Build a Distilled dataset by sorting by prediction entropy from the best pretrained model, discarding top 10 high-entropy samples per class, and taking the next 7,040 per class
-
-![OCT class examples](imgs/examples_oct_images.png)
-
----
-
-## Training Protocol
-
-- Backbone: ImageNet‑pretrained VGG16 or ResNet50  
-- CoLoRA per Conv2D: SeparableConv2D residual (pointwise Glorot init; depthwise zeros)  
-- Optimizer: Adam (defaults)  
-- Epoch schedule: 20 epochs; after each epoch merge residuals into base convs and reset residuals  
-- Datasets: Balanced and Distilled variants  
-
----
-
-## Results
-
-### Confusion matrices (Balanced vs Distilled)
-
-![Confusion matrices](imgs/confusion_matrix.png)
-
-### Comparison to State‑of‑the‑Art (Table 5)
-
-VGG16‑CoLoRA achieves Acc = 0.963, AUC = 0.995 using ~2.5M backpropagated parameters (15.6M total, merged), improving classical transfer learning by ~5% and outperforming ViT / State‑space / KAN baselines by ~1–4%.
-
-| Method                                          | AUC     | Acc.   | Params.        |
-|------------------------------------------------|---------|--------|----------------|
-| ResNet-18 (28) [medmnistv1]                    | 0.951   | 0.758  |                |
-| ResNet-50 (224) [medmnistv1]                   | 0.951   | 0.750  |                |
-| Dedicated CNN (28) [wilhelmi2024simple]        |         | 0.760  |                |
-| ResNet-50 (224) [wilhelmi2024simple]           |         | 0.776  |                |
-| MedViTv1-T [manzari2023medvit]                 | 0.961   | 0.767  | 15.2M          |
-| MedViTv1-S [manzari2023medvit]                 | 0.960   | 0.782  |                |
-| MedViTv1-L [manzari2023medvit]                 | 0.945   | 0.761  |                |
-| MedKAN-S [yang2025medkan]                      | 0.993   | 0.921  | 11.5M          |
-| MedKAN-B [yang2025medkan]                      | **0.996** | 0.927  | 24.6M          |
-| MedKAN-L [yang2025medkan]                      | 0.994   | 0.925  | 48.0M          |
-| MedMamba-T [yue2024medmamba]                   | 0.992   | 0.918  | 15.2M          |
-| MedMamba-S [yue2024medmamba]                   | 0.991   | 0.929  | 23.5M          |
-| MedMamba-B [yue2024medmamba]                   | **0.996** | 0.927  | 48.1M          |
-| MedMamba-X [yue2024medmamba]                   | 0.993   | 0.928  |                |
-| MedViTv2-T [manzari2025medical]                | 0.993   | 0.927  |                |
-| MedViTv2-S [manzari2025medical]                | 0.994   | 0.942  |                |
-| MedViTv2-B [manzari2025medical]                | **0.996** | 0.944  | 32.3M          |
-| MedViTv2-L [manzari2025medical]                | **0.996** | 0.952  |                |
-| ResNet50-Trans. Learning                       | 0.983   | 0.903  | 37.7M          |
-| ResNet50-**CoLoRA**                            | 0.992   | 0.951  | 14.2M†         |
-| VGG16-Trans. Learning                          | 0.982   | 0.916  | 0.9M           |
-| VGG16-**CoLoRA**                               | 0.995   | **0.963** | 2.6M‡          |
-
-**Table:** Performance comparison of a base model fine-tuned with CoLoRA (proposal) with SoTA methods in the OCTMNIST image classification task.  
-† 14.7M are trained by backpropagation of 37.7M total.  
-‡ 2.5M are trained by backpropagation of 15.6M.
-
-
----
-
-## Reproducing the Paper Results
-
-1) Prepare datasets (Balanced & Distilled):
-- Balanced: use 7,754 samples/class (total 31,016)
-- Distilled: sort by entropy, discard top 10/class, keep next 7,040/class
-
-2) Run training (VGG16‑CoLoRA):
-- Optimizer: Adam (defaults)
-- Epochs: 20
-- Merge residuals into base weights each epoch; reset residuals
-
-3) Expected metrics:
-- Balanced: Acc ~0.960 (Avg F1 ~0.960; Avg AUC ~0.993)
-- Distilled: Acc ~0.963 (Avg F1 ~0.962; Avg AUC ~0.995)
-
-4) Hardware:
-- Reference: NVIDIA RTX 3090 (~142s/epoch for VGG16‑CoLoRA)
-
----
-
-## How This Repository Implements CoLoRA
-
-- `vgg_colora_oct_medmnist.py`: End‑to‑end training, evaluation, and visualization pipeline  
-- `vgg_colora_oct_medmnist_clean.ipynb`: Clean, step‑by‑step notebook  
-- CoLoRA layer: residual SeparableConv2D added per Conv2D; pointwise (1×1) + depthwise split; merged after each epoch
-
----
+1. Choroidal Neovascularization (ChN)
+2. Diabetic Macular Edema (DME)
+3. Drusen
+4. Normal
 
 ## Installation
 
+Clone the repository and create an isolated Python environment:
+
 ```bash
-git clone https://github.com/ajhoyos/colora.git
-cd colora
-python -m venv venv
-source venv/bin/activate   # (Windows: venv\Scripts\activate)
+git clone https://github.com/ajhoyos/CoLoRA.git
+cd CoLoRA
+
+python -m venv .venv
+source .venv/bin/activate
+```
+
+On Windows:
+
+```powershell
+.venv\Scripts\activate
+```
+
+Install the dependencies:
+
+```bash
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
----
+GPU support depends on the TensorFlow build and your CUDA/ROCm environment. The repository itself does not install vendor-specific GPU drivers or toolkits.
+
+## Dataset modes
+
+The new implementation exposes three OCTMNISTv2 training modes.
+
+### Full
+
+Uses the complete original OCTMNISTv2 training split.
+
+```bash
+python vgg16_colora_octmnist.py --dataset-mode full
+```
+
+### Balanced
+
+Builds a deterministic class-balanced training subset using the size of the smallest class. For OCTMNISTv2 this corresponds to **7,754 images per class**, or **31,016 training images**.
+
+```bash
+python vgg16_colora_octmnist.py --dataset-mode balanced
+```
+
+### Distilled
+
+Loads the precomputed distilled dataset:
+
+```bash
+python vgg16_colora_octmnist.py \
+    --dataset-mode distilled \
+    --distilled-path ./OCTMNISTv2_Distilled.npz
+```
+
+In the revised manuscript, the distilled subset was constructed class-by-class from the balanced set by sorting samples in ascending predictive entropy, removing ranks **1–689** and **7,730–7,754**, and retaining ranks **690–7,729**. This results in **7,040 samples per class**.
+
+The current notebook and script **load** the distilled subset; they do not repeat the entropy-ranking/distillation procedure.
+
+## Training and evaluation
+
+The command-line script is the recommended entry point for reproducible training and evaluation.
+
+### Train and evaluate
+
+```bash
+python vgg16_colora_octmnist.py
+```
+
+Default configuration:
+
+```text
+Dataset mode:       distilled
+Image size:         224 × 224
+Batch size:         8
+Epochs:             20
+Backbone weights:   ImageNet
+CoLoRA placement:   VGG16 blocks 2–5
+Learning rate:      1e-4
+Weight decay:       1e-5
+Augmentation:       enabled
+```
+
+### Balanced training
+
+```bash
+python vgg16_colora_octmnist.py \
+    --dataset-mode balanced \
+    --epochs 20
+```
+
+### Full training set
+
+```bash
+python vgg16_colora_octmnist.py \
+    --dataset-mode full \
+    --epochs 20
+```
+
+### Disable augmentation
+
+```bash
+python vgg16_colora_octmnist.py --no-augmentation
+```
+
+### Change CoLoRA placement
+
+For example, to adapt only blocks 3–5:
+
+```bash
+python vgg16_colora_octmnist.py \
+    --colora-blocks block3_conv block4_conv block5_conv
+```
+
+### Train only
+
+```bash
+python vgg16_colora_octmnist.py --run-mode train
+```
+
+### Evaluate an existing model
+
+```bash
+python vgg16_colora_octmnist.py \
+    --run-mode eval \
+    --model-path ./results/distilled_blocks_2_3_4_5/best_validation_model.keras
+```
+
+Use
+
+```bash
+python vgg16_colora_octmnist.py --help
+```
+
+to see the complete command-line interface.
+
+## Output files
+
+A training run creates an experiment directory such as
+
+```text
+results/distilled_blocks_2_3_4_5/
+```
+
+containing:
+
+```text
+best_validation_model.keras
+training_history.csv
+training_curves.png
+training_metadata.json
+experiment_config.json
+dataset_metadata.json
+test_summary.csv
+test_class_metrics.csv
+test_confusion_matrix.csv
+test_confusion_matrix.png
+```
+
+The test split is loaded only during final evaluation.
+
+## Tutorial notebook
+
+`VGG16_CoLoRA_OCTMNIST_tutorial.ipynb` presents the same main workflow in notebook form:
+
+1. experiment configuration;
+2. OCTMNIST loading;
+3. TensorFlow data pipeline;
+4. VGG16 construction;
+5. CoLoRA layers and placement;
+6. training using validation-based checkpoint selection;
+7. final test inference and metrics.
+
+For manuscript-scale experiments, use the full epoch schedule. If the notebook training call has been temporarily set to a small value such as `epochs=3` for a smoke test, change it back to:
+
+```python
+epochs=EPOCHS
+```
+
+where `EPOCHS = 20`.
+
+## Reference results from the revised manuscript
+
+The values below summarize the revised manuscript and are provided as **reference experimental results**. They should not be interpreted as a guarantee that every single run will reproduce exactly the same values.
+
+### VGG16-CoLoRA layer placement on OCTMNISTv2
+
+| Method / placement | Trainable params | Avg. epoch time | Test accuracy (mean ± SD) | Max. test accuracy |
+|---|---:|---:|---:|---:|
+| CoLoRA blocks 1–5 | 2.55M | 4.42 min | 0.956 ± 0.003 | 0.962 |
+| **CoLoRA blocks 2–5** | **2.54M** | **3.00 min** | **0.959 ± 0.003** | **0.966** |
+| CoLoRA blocks 3–5 | 2.51M | 2.79 min | 0.957 ± 0.002 | 0.961 |
+| CoLoRA blocks 4–5 | 2.34M | 2.15 min | 0.940 ± 0.003 | 0.957 |
+| CoLoRA block 5 | 1.67M | 1.64 min | 0.941 ± 0.002 | 0.949 |
+| CoLoRA blocks 2–5, pointwise only | 0.91M | 1.95 min | 0.933 ± 0.005 | 0.944 |
+| Transfer learning | 0.87M | 1.32 min | 0.894 ± 0.007 | 0.908 |
+| Full fine-tuning | 15.58M | 3.27 min | 0.918 ± 0.005 | 0.957 |
+
+The placement study indicates that blocks **2–5** provide the strongest predictive result among the evaluated VGG16 placements, while blocks **3–5** provide a closely related result with somewhat lower training cost.
+
+### Distilled OCTMNISTv2
+
+For the distilled VGG16-CoLoRA experiment, the revised manuscript reports a best test accuracy of **0.966** and an AUC of approximately **0.995**. The class-wise distilled experiment reports the following averages:
+
+| Metric | Average |
+|---|---:|
+| AUC | 0.995 |
+| Recall | 0.962 |
+| Precision | 0.963 |
+| F1 | 0.962 |
+
+### Controlled PEFT comparison on balanced OCTMNISTv2
+
+| Method | Test AUC | Test accuracy | Trainable params |
+|---|---:|---:|---:|
+| Transfer Learning | 0.979 | 0.933 | 0.87M |
+| Adapters | 0.995 | 0.957 | 1.50M |
+| BitFit | 0.979 | 0.896 | 0.87M |
+| Conv-LoRA R4, α=8 | 0.991 | 0.944 | 0.90M |
+| Conv-LoRA R8, α=16 | 0.990 | 0.943 | 0.93M |
+| Conv-LoRA R16, α=32 | 0.993 | 0.949 | 0.99M |
+| CoLoRA block 5 | 0.993 | 0.939 | 1.67M |
+| **CoLoRA blocks 2–5** | **0.994** | **0.954** | **2.54M** |
+
+Adapters obtained the strongest raw balanced-dataset accuracy in this controlled comparison. CoLoRA blocks 2–5 outperformed the evaluated Conv-LoRA configurations while retaining a mergeable convolution-aware update and avoiding an explicit rank/scaling-factor hyperparameter.
+
+### Additional MedMNIST datasets
+
+VGG16-CoLoRA improved over VGG16 transfer learning in the reported experiments:
+
+| Dataset | Transfer learning AUC / Acc. | CoLoRA AUC / Acc. |
+|---|---:|---:|
+| RetinaMNIST | 0.756 / 0.527 | 0.776 / 0.552 |
+| PathMNIST | 0.981 / 0.876 | 0.993 / 0.956 |
+| BloodMNIST | 0.995 / 0.932 | 0.998 / 0.981 |
+
+### ResNet50
+
+The revised manuscript reports **AUC 0.992** and **accuracy 0.951** for ResNet50-CoLoRA, using approximately **14.7M backpropagated parameters** compared with 37.7M parameters for the full ResNet50 model.
+
+### Non-medical datasets
+
+The revised manuscript also evaluates CoLoRA outside medical imaging.
+
+#### CIFAR-100
+
+| Method | AUC | Top-1 | Top-5 |
+|---|---:|---:|---:|
+| Transfer Learning | 0.889 ± 0.004 | 0.258 ± 0.002 | 0.535 ± 0.004 |
+| Adapters | 0.942 ± 0.004 | 0.449 ± 0.004 | 0.730 ± 0.008 |
+| BitFit | 0.914 ± 0.003 | 0.327 ± 0.003 | 0.613 ± 0.003 |
+| Conv-LoRA | 0.947 ± 0.002 | 0.424 ± 0.006 | 0.732 ± 0.008 |
+| **CoLoRA blocks 2–5** | **0.961 ± 0.001** | **0.451 ± 0.004** | **0.766 ± 0.003** |
+| CoLoRA block 5 | 0.911 ± 0.004 | 0.324 ± 0.003 | 0.621 ± 0.009 |
+
+#### ImageNet-R
+
+For the controlled class-balanced ImageNet-R subset:
+
+| Method | AUC | Top-1 | Top-5 |
+|---|---:|---:|---:|
+| Transfer Learning | 0.737 ± 0.009 | 0.087 ± 0.008 | 0.210 ± 0.009 |
+| Conv-LoRA | 0.697 ± 0.016 | 0.071 ± 0.009 | 0.174 ± 0.014 |
+| **CoLoRA blocks 2–5** | **0.754 ± 0.008** | **0.109 ± 0.005** | **0.241 ± 0.012** |
+
+These experiments are cross-domain validation experiments rather than exhaustive optimization of CIFAR-100 or ImageNet-R.
+
+## Training-memory note
+
+Parameter efficiency does not imply an equivalent reduction in peak training memory.
+
+Under the GPU-memory protocol reported in the revised manuscript:
+
+- full VGG16 fine-tuning: **3.320 GiB**;
+- transfer learning: **2.316 GiB**;
+- Conv-LoRA (r=8, α=16): **3.052 GiB**;
+- CoLoRA blocks 2–5: **3.172 GiB**.
+
+CoLoRA should therefore be characterized primarily as **parameter-efficient and deployment-efficient**. Peak training memory also depends on activation storage, optimizer states, spatial resolution, and which convolutional blocks are adapted.
+
+## Implementation note versus manuscript experiments
+
+The revised manuscript studies an optional **merge-reset** procedure in which CoLoRA updates may be merged into the backbone during training and the auxiliary update parameters reinitialized.
+
+The cleaned repository implementation provided here prioritizes a simple validation-selected training/evaluation workflow: the CoLoRA branch is optimized, the checkpoint with the best validation accuracy is restored, and its learned update is merged before the saved model is evaluated on the held-out test set.
+
+Consequently, the manuscript tables above are reference results from the experimental study rather than guaranteed outputs of a single default execution of the cleaned script.
+
+## Reproducibility
+
+For a new experiment, record at least:
+
+- dataset mode;
+- CoLoRA block placement;
+- random seed;
+- batch size;
+- number of epochs;
+- augmentation setting;
+- TensorFlow/Keras versions;
+- GPU model and software stack.
+
+The training script stores the experiment configuration and dataset metadata alongside the saved model.
 
 ## Citation
 
-If you use CoLoRA or this repository, please cite the paper:
+If you use CoLoRA or this repository in academic work, please cite:
 
 ```bibtex
 @article{rivera2025colora,
-  title={COLORA: Efficient Fine-Tuning for Convolutional Models with a Study Case on Optical Coherence Tomography Image Classification},
-  author={Rivera, Mariano and Hoyos, Angello},
-  journal={arXiv preprint arXiv:2505.18315},
-  year={2025},
-  url={https://arxiv.org/abs/2505.18315}
+  title   = {COLORA: Efficient Fine-Tuning for Convolutional Models with a Study Case on Optical Coherence Tomography Image Classification},
+  author  = {Rivera, Mariano and Hoyos, Angello},
+  journal = {arXiv preprint arXiv:2505.18315},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2505.18315}
 }
 ```
 
----
+## Acknowledgment
 
-All embedded figures are reproduced from the COLORA paper (Rivera & Hoyos, 2025) solely for documentation and replication purposes in this repository. If you redistribute the README, please retain proper credit and links to the paper.
+The OCTMNIST experiments use the MedMNIST benchmark. Please also cite MedMNIST and the original OCT dataset as appropriate when using those data in published work.
