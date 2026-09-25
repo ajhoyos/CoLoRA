@@ -29,7 +29,12 @@ CoLoRA/
 └── imgs/
 ```
 
-The distilled dataset file is not required for the `full` or `balanced` modes. To use `distilled`, place your precomputed file in the repository (or provide its path):
+The distilled dataset file is not required for the `full` or `balanced` modes. Because the distilled OCTMNISTv2 file is approximately 1.5 GB, it is hosted separately on Google Drive rather than tracked in this repository:
+
+**Distilled OCTMNISTv2 dataset:**  
+https://drive.google.com/file/d/1kMrA6V5P4XZoeb6s7myqVn5OiAJqxVqq/view?usp=sharing
+
+Download the file and place it in the repository root, or provide its path explicitly:
 
 ```text
 OCTMNISTv2_Distilled.npz
@@ -119,7 +124,11 @@ python vgg16_colora_octmnist.py --dataset-mode balanced
 
 ### Distilled
 
-Loads the precomputed distilled dataset:
+Download the precomputed distilled dataset from:
+
+https://drive.google.com/file/d/1kMrA6V5P4XZoeb6s7myqVn5OiAJqxVqq/view?usp=sharing
+
+Then load it with:
 
 ```bash
 python vgg16_colora_octmnist.py \
